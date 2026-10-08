@@ -1,0 +1,12 @@
+# Core pipeline
+pypdf>=5.0
+python-dotenv>=1.0
+numpy>=1.26
+faiss-cpu>=1.8
+langchain-huggingface>=0.1
+sentence-transformers>=3.0
+
+# API layer
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
