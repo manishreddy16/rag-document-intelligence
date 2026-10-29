@@ -28,7 +28,7 @@ class Settings:
     top_k: int = 4
     # Models (used from Checkpoint 3 onward)
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
-    llm_provider: str = "gemini"
+    llm_provider: str = "ollama"
     llm_model: str = ""          # set in .env
     llm_api_key: str = ""        # set in .env, never in code
     llm_timeout_seconds: int = 30

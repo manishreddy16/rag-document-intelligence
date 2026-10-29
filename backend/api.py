@@ -18,7 +18,7 @@ from .embeddings import EmbeddingService, HuggingFaceEmbeddingService
 from .error_map import status_for
 from .exceptions import RAGError
 from .ingestion import DocumentManager
-from .llm_service import LLMService, create_llm_service
+from .llm_service import LLMService, create_llm_service, llm_is_configured
 from .rag_pipeline import RAGPipeline
 from .schemas import (AskRequest, AskResponse, DocumentOut, ErrorResponse,
                       HealthResponse, SourceOut, UploadResponse)
@@ -76,7 +76,7 @@ def create_app(settings: Settings | None = None,
             document=DocumentOut(**asdict(info)) if info else None,
             embedding_model=settings.embedding_model,
             llm_provider=settings.llm_provider,
-            llm_configured=bool(settings.llm_api_key and settings.llm_model))
+            llm_configured=llm_is_configured(settings))
 
     _errors = {code: {"model": ErrorResponse} for code in (400, 409, 413, 415, 422, 429, 500, 502, 503)}
 

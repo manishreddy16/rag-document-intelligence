@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_OLLAMA_MODEL = "llama3.2:3b"
 
 
 class LLMService(Protocol):
@@ -112,8 +114,62 @@ class GeminiLLMService:
         return text
 
 
+class OllamaLLMService:
+    def __init__(self, model: str = DEFAULT_OLLAMA_MODEL, timeout: int = 30):
+        self.model, self.timeout = model or DEFAULT_OLLAMA_MODEL, timeout
+
+    def generate(self, prompt: str) -> str:
+        request = urllib.request.Request(
+            OLLAMA_URL,
+            data=json.dumps({
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                raise LLMRateLimitError("The local Ollama service returned HTTP 429.") from exc
+            if exc.code in (400, 404):
+                raise LLMConfigError(
+                    f"Ollama rejected the request (HTTP {exc.code}); check LLM_MODEL "
+                    "and ensure the model is installed.") from exc
+            raise LLMUnavailableError(
+                f"The local Ollama service returned HTTP {exc.code}.") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise LLMUnavailableError(
+                "Could not reach the local Ollama service. Ensure Ollama is running.") from exc
+        except ValueError as exc:
+            raise LLMUnavailableError(
+                "The local Ollama service returned an unreadable response.") from exc
+
+        if not isinstance(data, dict):
+            raise LLMUnavailableError("The local Ollama service returned an invalid response.")
+        text = data.get("response")
+        if not isinstance(text, str) or not text.strip():
+            raise LLMUnavailableError("The LLM returned an empty answer.")
+        return text.strip()
+
+
+def llm_is_configured(settings: Settings) -> bool:
+    """Report provider configuration completeness, not whether a service is reachable."""
+    provider = settings.llm_provider.lower()
+    if provider == "gemini":
+        return bool(settings.llm_api_key and settings.llm_model)
+    if provider == "ollama":
+        return True  # Ollama has a built-in model default; reachability is checked on use.
+    return False
+
+
 def create_llm_service(settings: Settings) -> LLMService:
     if settings.llm_provider.lower() == "gemini":
         return GeminiLLMService(settings.llm_api_key, settings.llm_model,
                                 settings.llm_timeout_seconds, settings.llm_max_retries)
+    if settings.llm_provider.lower() == "ollama":
+        return OllamaLLMService(settings.llm_model or DEFAULT_OLLAMA_MODEL,
+                                settings.llm_timeout_seconds)
     raise LLMConfigError(f"Unsupported LLM_PROVIDER '{settings.llm_provider}'.")

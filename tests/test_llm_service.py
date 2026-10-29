@@ -4,10 +4,12 @@ import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
 
-from backend.config import Settings
+from backend.config import Settings, load_settings
 from backend.exceptions import (LLMConfigError, LLMError, LLMRateLimitError,
                                 LLMUnavailableError)
-from backend.llm_service import GeminiLLMService, create_llm_service
+from backend.llm_service import (DEFAULT_OLLAMA_MODEL, OLLAMA_URL,
+                                 GeminiLLMService, OllamaLLMService,
+                                 create_llm_service, llm_is_configured)
 
 KEY = "SECRET-KEY-123"
 
@@ -185,6 +187,82 @@ class RetryTests(unittest.TestCase):
     def test_factory_passes_retry_setting(self):
         svc = create_llm_service(Settings(llm_provider="gemini", llm_max_retries=5))
         self.assertEqual(svc.max_retries, 5)
+
+
+class OllamaTests(unittest.TestCase):
+    @patch("backend.llm_service.urllib.request.urlopen")
+    def test_success_and_request_shape(self, urlopen):
+        urlopen.return_value = fake_response({"response": "  grounded answer  "})
+        service = OllamaLLMService("llama3.2:3b", timeout=17)
+
+        self.assertEqual(service.generate("use this context"), "grounded answer")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, OLLAMA_URL)
+        self.assertEqual(json.loads(request.data), {
+            "model": "llama3.2:3b",
+            "prompt": "use this context",
+            "stream": False,
+        })
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 17)
+
+    @patch("backend.llm_service.urllib.request.urlopen")
+    def test_missing_empty_and_invalid_generated_text(self, urlopen):
+        for payload in ({}, {"response": ""}, {"response": "  "},
+                        {"response": None}, []):
+            urlopen.return_value = fake_response(payload) if isinstance(payload, dict) else _json_response(payload)
+            with self.subTest(payload=payload), self.assertRaises(LLMUnavailableError):
+                OllamaLLMService().generate("prompt")
+
+    @patch("backend.llm_service.urllib.request.urlopen")
+    def test_invalid_json(self, urlopen):
+        urlopen.return_value = _raw_response(b"not json")
+        with self.assertRaises(LLMUnavailableError):
+            OllamaLLMService().generate("prompt")
+
+    @patch("backend.llm_service.urllib.request.urlopen")
+    def test_connection_errors_and_timeouts(self, urlopen):
+        for error in (urllib.error.URLError("down"), TimeoutError("timed out")):
+            urlopen.side_effect = error
+            with self.subTest(error=type(error).__name__), self.assertRaises(LLMUnavailableError):
+                OllamaLLMService().generate("prompt")
+        self.assertEqual(urlopen.call_count, 2)
+
+    @patch("backend.llm_service.urllib.request.urlopen")
+    def test_http_errors(self, urlopen):
+        for code, error_type in ((404, LLMConfigError), (429, LLMRateLimitError),
+                                 (500, LLMUnavailableError)):
+            urlopen.reset_mock()
+            urlopen.side_effect = http_error(code)
+            with self.subTest(status=code), self.assertRaises(error_type):
+                OllamaLLMService().generate("prompt")
+            self.assertEqual(urlopen.call_count, 1)
+
+    def test_factory_and_configuration_without_api_key(self):
+        with patch.dict("os.environ", {
+                "LLM_PROVIDER": "ollama", "LLM_MODEL": "", "LLM_API_KEY": "",
+                "LLM_TIMEOUT_SECONDS": "30"}):
+            settings = load_settings()
+
+        self.assertEqual(Settings().llm_provider, "ollama")
+        self.assertIsInstance(create_llm_service(Settings()), OllamaLLMService)
+        service = create_llm_service(settings)
+        self.assertIsInstance(service, OllamaLLMService)
+        self.assertEqual(service.model, DEFAULT_OLLAMA_MODEL)
+        self.assertTrue(llm_is_configured(settings))
+        self.assertEqual(settings.llm_api_key, "")
+        self.assertEqual(settings.llm_timeout_seconds, 30)
+
+
+def _raw_response(payload: bytes):
+    resp = MagicMock()
+    resp.read.return_value = payload
+    ctx = MagicMock()
+    ctx.__enter__.return_value = resp
+    return ctx
+
+
+def _json_response(payload):
+    return _raw_response(json.dumps(payload).encode())
 
 
 if __name__ == "__main__":

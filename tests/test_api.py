@@ -60,6 +60,21 @@ class ApiTests(unittest.TestCase):
         self.upload()
         self.assertTrue(self.client.get("/health").json()["document_loaded"])
 
+    def test_health_ollama_without_api_key(self):
+        from backend.api import create_app
+
+        local_settings = Settings(
+            upload_dir=Path(tempfile.mkdtemp()) / "up",
+            index_dir=Path(tempfile.mkdtemp()) / "idx",
+            llm_provider="ollama", llm_model="", llm_api_key="")
+        client = TestClient(create_app(local_settings, FakeEmbeddingService(), self.llm))
+
+        response = client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["llm_provider"], "ollama")
+        self.assertTrue(response.json()["llm_configured"])
+        self.assertNotIn("SECRET-KEY-123", response.text)
+
     def test_upload_success_schema(self):
         r = self.upload()
         self.assertEqual(r.status_code, 200)

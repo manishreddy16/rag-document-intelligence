@@ -20,7 +20,7 @@ Browser UI (frontend/)  ->  FastAPI (backend/api.py)
  Upload:  PDF -> validate -> pypdf text per page -> page-aware chunks
           -> embeddings (all-MiniLM-L6-v2) -> FAISS index -> saved to data/index/
  Ask:     question -> same embedding model -> FAISS top-k -> context block
-          -> grounded prompt -> Gemini -> answer + sources -> UI
+          -> grounded prompt -> selected LLM (Ollama or Gemini) -> answer + sources -> UI
 ```
 
 ## Technologies - what each actually does here
@@ -32,7 +32,7 @@ Browser UI (frontend/)  ->  FastAPI (backend/api.py)
 | LangChain | **Narrow role:** `langchain-huggingface`'s `HuggingFaceEmbeddings` loads/runs the embedding model (`backend/embeddings.py`). Chunking, FAISS, prompt and Gemini call are deliberately plain Python so each step is visible and testable |
 | FAISS | `IndexFlatIP` exact vector search; used directly (`backend/vector_store.py`) |
 | FastAPI | HTTP layer: `/upload`, `/ask`, `/health`, request/response schemas, status codes |
-| Gemini (Google AI Studio) | The LLM, called over REST with the standard library, behind the `LLMService` interface |
+| Ollama / Gemini | Local Ollama or Google Gemini, called over REST with the standard library behind the `LLMService` interface |
 | pypdf | PDF text extraction with real page numbers |
 
 ## Setup (Windows / PowerShell)
@@ -45,23 +45,26 @@ wheels per Python version; if `pip install` fails on a very new Python, use 3.11
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt -r requirements-dev.txt
-copy .env.example .env      # then edit .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }  # then edit .env
 ```
 
-Edit `.env`: set `LLM_API_KEY` (create at https://aistudio.google.com) and
-`LLM_MODEL` (a current Gemini model your key can use; check
+If `.env` already exists, keep it and update only the provider settings you need.
+The example `.env` selects local Ollama. Ensure the Ollama service is running
+and has `llama3.2:3b` installed before asking questions. To use Gemini instead,
+set `LLM_PROVIDER=gemini`, a current `LLM_MODEL` your key can use (check
 https://ai.google.dev/gemini-api/docs/models and the deprecations page - names change, so
-none is hard-coded). Never commit `.env`.
+none is hard-coded), and `LLM_API_KEY` (create at https://aistudio.google.com).
+Never commit `.env`.
 
 ### Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LLM_API_KEY` | - | Gemini key (secret) |
-| `LLM_MODEL` | - | Gemini model name |
-| `LLM_PROVIDER` | `gemini` | Only `gemini` is implemented |
+| `LLM_API_KEY` | - | Gemini key (secret); not required for Ollama |
+| `LLM_MODEL` | `llama3.2:3b` for Ollama; unset for Gemini | Selected provider's model |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `gemini` |
 | `LLM_TIMEOUT_SECONDS` | 30 | LLM request timeout (per attempt) |
-| `LLM_MAX_RETRIES` | 3 | Retries for transient Gemini errors; 0 disables |
+| `LLM_MAX_RETRIES` | 3 | Retries for transient Gemini errors; Ollama requests are not retried |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Changing it requires re-uploading (dimension/space change) |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 1000 / 150 | Characters per chunk / overlap |
 | `TOP_K` | 4 | Chunks retrieved per question |
@@ -81,7 +84,7 @@ Try `data/sample/sample_policy.pdf` (a fictional 2-page policy) first.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | Status, whether a document is loaded, whether LLM key+model are set (never returns the key) |
+| `GET /health` | Status, document state, and whether the selected provider is configured (does not test provider reachability or return secrets) |
 | `POST /upload` | multipart field `file` (PDF). Indexes it, **replacing** any previous document |
 | `POST /ask` | JSON `{"question": "..."}` -> `{"answer": "...", "sources": [{source, page_number, chunk_id, score, snippet}]}` |
 
@@ -98,7 +101,7 @@ Errors are JSON: `{"error": {"code": "...", "message": "..."}}`.
 | embedding model failed to load/run | 503 | embedding_error |
 | FAISS/index problem | 500 | vector_store_error |
 | LLM rate limit | 429 | llm_rate_limited |
-| LLM key/model missing or rejected | 503 | llm_not_configured |
+| LLM key/model missing or rejected, or Ollama model/request rejected | 503 | llm_not_configured |
 | LLM network/5xx/blocked/malformed | 502 | llm_unavailable |
 | anything unexpected | 500 | internal_error (details only in server log) |
 
@@ -148,6 +151,7 @@ all 54 should run; if any fail, that is real information - please investigate.
 | `embedding_error` (503) | Model download failed (no internet / proxy) |
 | `llm_not_configured` (503) | `LLM_API_KEY` or `LLM_MODEL` empty, key rejected, or model name retired/not found (Gemini 400/401/403/404 map here) |
 | `llm_rate_limited` (429) | Provider quota/rate limit; wait and retry |
+| `llm_unavailable` with Ollama | Confirm Ollama is running at `http://localhost:11434` and the configured model is installed |
 | `vector_store_error` on save/load | Rare: FAISS file I/O can fail on non-ASCII Windows paths; move the project to a plain-ASCII path |
 | Server ignores `.env` edits | Restart uvicorn |
 | "No document" after restart | `data/index/` was deleted or damaged; upload again |

@@ -45,7 +45,7 @@ class HealthResponse(BaseModel):
     document: Optional[DocumentOut] = None
     embedding_model: str
     llm_provider: str
-    llm_configured: bool  # True if key and model are set; the key itself is never returned
+    llm_configured: bool  # Provider configuration is complete; this does not test reachability.
 
 
 class ErrorDetail(BaseModel):
